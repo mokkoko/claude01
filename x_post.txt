@@ -1,0 +1,13 @@
+🚀 Excited to share our new Cisco Device Scanner is now live!
+
+Built with Python + Netmiko, this tool helps network engineers:
+✅ Scan Cisco routers & switches via SSH
+✅ Extract interface info (IPs, status, descriptions)
+✅ Auto-export to CSV for documentation
+✅ Multi-device scanning support
+
+Perfect for network audits, documentation, and inventory management.
+
+Simplifying network operations, one scan at a time! 💻🔧
+
+#NetworkAutomation #Cisco #Python #DevOps #NetworkEngineering #ITAutomation
