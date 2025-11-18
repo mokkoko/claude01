@@ -9,38 +9,85 @@ import getpass
 import re
 import csv
 from datetime import datetime
+from typing import Dict, Optional, Any
 from netmiko import ConnectHandler
 from netmiko.exceptions import NetmikoTimeoutException, NetmikoAuthenticationException
 
+# Constants
+UNASSIGNED_IP = 'unassigned'
+HEADER_KEYWORD = 'Interface'
+COLUMN_WIDTHS = {'interface': 20, 'ip': 15, 'status': 10, 'desc': 30}
+DEFAULT_DEVICE_TYPE = 'cisco_ios'
+DEFAULT_CONNECT_TIMEOUT = 10
+DEFAULT_SESSION_TIMEOUT = 60
 
-def get_device_info():
-    """Prompt user for device connection information."""
+# Pre-compiled regex patterns for better performance
+INTERFACE_PATTERN = re.compile(r'(\S+)\s+(\S+)\s+\S+\s+\S+\s+(\S+)\s+(\S+)')
+DESC_PATTERN = re.compile(r'\S+\s+\S+\s+\S+\s+(.*)')
+
+
+def normalize_ip_address(ip_address: str) -> str:
+    """Convert 'unassigned' IP address to 'N/A' for display purposes.
+
+    Args:
+        ip_address: The IP address string to normalize
+
+    Returns:
+        'N/A' if IP is unassigned, otherwise the original IP address
+    """
+    return 'N/A' if ip_address == UNASSIGNED_IP else ip_address
+
+
+def get_device_info(enable_session_log: bool = False) -> Dict[str, Any]:
+    """Prompt user for device connection information.
+
+    Args:
+        enable_session_log: Whether to enable session logging
+
+    Returns:
+        Dictionary containing device connection parameters
+    """
     print("\n=== Cisco Device Scanner ===\n")
     ip_address = input("Enter device IP address: ").strip()
     username = input("Enter username: ").strip()
     password = getpass.getpass("Enter password: ")
 
-    return {
-        'device_type': 'cisco_ios',
+    device_params = {
+        'device_type': DEFAULT_DEVICE_TYPE,
         'host': ip_address,
         'username': username,
         'password': password,
-        'session_log': 'netmiko_session.log'
+        'timeout': DEFAULT_CONNECT_TIMEOUT,
+        'session_timeout': DEFAULT_SESSION_TIMEOUT,
     }
 
+    # Only add session log if enabled
+    if enable_session_log:
+        device_params['session_log'] = 'netmiko_session.log'
 
-def parse_interface_info(show_ip_int_output, show_int_desc_output):
-    """Parse interface information from command outputs."""
-    interfaces = {}
+    return device_params
+
+
+def parse_interface_info(show_ip_int_output: str, show_int_desc_output: str) -> Dict[str, Dict[str, str]]:
+    """Parse interface information from command outputs.
+
+    Args:
+        show_ip_int_output: Output from 'show ip interface brief' command
+        show_int_desc_output: Output from 'show interfaces description' command
+
+    Returns:
+        Dictionary mapping interface names to their properties (ip_address, status, protocol, description)
+    """
+    interfaces: Dict[str, Dict[str, str]] = {}
 
     # Parse IP addresses from 'show ip interface brief'
     for line in show_ip_int_output.split('\n'):
         # Skip header and empty lines
-        if 'Interface' in line or not line.strip():
+        if not line.strip() or HEADER_KEYWORD in line:
             continue
 
-        # Match interface lines
-        match = re.match(r'(\S+)\s+(\S+)\s+\S+\s+\S+\s+(\S+)\s+(\S+)', line)
+        # Match interface lines using pre-compiled pattern
+        match = INTERFACE_PATTERN.match(line)
         if match:
             interface = match.group(1)
             ip_address = match.group(2)
@@ -57,15 +104,15 @@ def parse_interface_info(show_ip_int_output, show_int_desc_output):
     # Parse descriptions from 'show interfaces description'
     for line in show_int_desc_output.split('\n'):
         # Skip header and empty lines
-        if 'Interface' in line or not line.strip():
+        if not line.strip() or HEADER_KEYWORD in line:
             continue
 
         # Match interface description lines
         parts = line.split()
         if len(parts) >= 2:
             interface = parts[0]
-            # Find where description starts (after status fields)
-            desc_match = re.search(r'\S+\s+\S+\s+\S+\s+(.*)', line)
+            # Find where description starts (after status fields) using pre-compiled pattern
+            desc_match = DESC_PATTERN.search(line)
             description = desc_match.group(1).strip() if desc_match else ''
 
             if interface in interfaces:
@@ -74,33 +121,59 @@ def parse_interface_info(show_ip_int_output, show_int_desc_output):
     return interfaces
 
 
-def display_results(interfaces, device_ip):
-    """Display formatted interface information."""
-    print(f"\n{'='*80}")
+def display_results(interfaces: Dict[str, Dict[str, str]], device_ip: str) -> None:
+    """Display formatted interface information.
+
+    Args:
+        interfaces: Dictionary of interface information
+        device_ip: IP address of the device
+    """
+    separator = '=' * 80
+    print(f"\n{separator}")
     print(f"Interface Report for Device: {device_ip}")
-    print(f"{'='*80}\n")
+    print(f"{separator}\n")
 
     if not interfaces:
         print("No interfaces found or device returned no data.")
         return
 
-    print(f"{'Interface':<20} {'IP Address':<15} {'Status':<10} {'Description':<30}")
-    print(f"{'-'*80}")
+    # Extract column widths from constants
+    col_int = COLUMN_WIDTHS['interface']
+    col_ip = COLUMN_WIDTHS['ip']
+    col_status = COLUMN_WIDTHS['status']
+    col_desc = COLUMN_WIDTHS['desc']
 
-    for interface, info in sorted(interfaces.items()):
-        ip_addr = info['ip_address'] if info['ip_address'] != 'unassigned' else 'N/A'
+    # Build header
+    header = f"{'Interface':<{col_int}} {'IP Address':<{col_ip}} {'Status':<{col_status}} {'Description':<{col_desc}}"
+    print(header)
+    print('-' * 80)
+
+    # Sort once and iterate
+    sorted_interfaces = sorted(interfaces.items())
+    for interface, info in sorted_interfaces:
+        ip_addr = normalize_ip_address(info['ip_address'])
         status = f"{info['status']}/{info['protocol']}"
+        # Simplified description truncation
         description = info['description'][:28] + '..' if len(info['description']) > 30 else info['description']
 
-        print(f"{interface:<20} {ip_addr:<15} {status:<10} {description:<30}")
+        print(f"{interface:<{col_int}} {ip_addr:<{col_ip}} {status:<{col_status}} {description:<{col_desc}}")
 
-    print(f"\n{'='*80}")
+    print(f"\n{separator}")
     print(f"Total interfaces: {len(interfaces)}")
-    print(f"{'='*80}\n")
+    print(f"{separator}\n")
 
 
-def export_to_csv(interfaces, device_ip, filename=None):
-    """Export interface information to a CSV file."""
+def export_to_csv(interfaces: Dict[str, Dict[str, str]], device_ip: str, filename: Optional[str] = None) -> Optional[str]:
+    """Export interface information to a CSV file.
+
+    Args:
+        interfaces: Dictionary of interface information
+        device_ip: IP address of the device
+        filename: Optional custom filename for the CSV export
+
+    Returns:
+        Filename if export successful, None otherwise
+    """
     if not interfaces:
         print("No data to export.")
         return None
@@ -120,9 +193,11 @@ def export_to_csv(interfaces, device_ip, filename=None):
             # Write header
             writer.writeheader()
 
+            # Sort once and iterate - reuse sorting
+            sorted_interfaces = sorted(interfaces.items())
             # Write interface data
-            for interface, info in sorted(interfaces.items()):
-                ip_addr = info['ip_address'] if info['ip_address'] != 'unassigned' else 'N/A'
+            for interface, info in sorted_interfaces:
+                ip_addr = normalize_ip_address(info['ip_address'])
                 writer.writerow({
                     'Device_IP': device_ip,
                     'Interface': interface,
@@ -184,23 +259,23 @@ def scan_cisco_device(device_info):
     try:
         print(f"\nConnecting to {device_info['host']}...")
 
-        # Establish SSH connection
-        connection = ConnectHandler(**device_info)
-        print("Connected successfully!\n")
+        # Establish SSH connection using context manager for proper resource management
+        with ConnectHandler(**device_info) as connection:
+            print("Connected successfully!\n")
 
-        # Retrieve interface information
-        print("Retrieving interface information...")
-        show_ip_int_brief = connection.send_command('show ip interface brief')
-        show_int_desc = connection.send_command('show interfaces description')
+            # Retrieve interface information
+            print("Retrieving interface information...")
+            show_ip_int_brief = connection.send_command('show ip interface brief')
+            show_int_desc = connection.send_command('show interfaces description')
 
-        # Parse the information
-        interfaces = parse_interface_info(show_ip_int_brief, show_int_desc)
+            # Parse the information
+            interfaces = parse_interface_info(show_ip_int_brief, show_int_desc)
 
-        # Display results
-        display_results(interfaces, device_info['host'])
+            # Display results
+            display_results(interfaces, device_info['host'])
 
-        # Export to CSV
-        export_to_csv(interfaces, device_info['host'])
+            # Export to CSV
+            export_to_csv(interfaces, device_info['host'])
 
         # Backup device configuration
         backup_device_config(connection, device_info['host'])
@@ -226,11 +301,12 @@ def scan_cisco_device(device_info):
         return False
 
 
-def main():
+def main() -> None:
     """Main function to run the Cisco device scanner."""
     try:
         while True:
-            device_info = get_device_info()
+            # Session logging disabled by default to avoid filling disk
+            device_info = get_device_info(enable_session_log=False)
             scan_cisco_device(device_info)
 
             # Ask if user wants to scan another device
