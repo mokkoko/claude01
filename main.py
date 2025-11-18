@@ -140,6 +140,45 @@ def export_to_csv(interfaces, device_ip, filename=None):
         return None
 
 
+def backup_device_config(connection, device_ip):
+    """Backup device running configuration to a text file."""
+    try:
+        print("Backing up device configuration...")
+
+        # Get hostname from device
+        hostname_output = connection.send_command('show running-config | include hostname')
+
+        # Extract hostname from output (format: "hostname DEVICE_NAME")
+        hostname_match = re.search(r'hostname\s+(\S+)', hostname_output)
+        if hostname_match:
+            hostname = hostname_match.group(1)
+        else:
+            # If hostname not found, use IP address
+            hostname = device_ip.replace('.', '_')
+
+        # Get running configuration
+        running_config = connection.send_command('show running-config')
+
+        # Generate filename with device name and date
+        timestamp = datetime.now().strftime("%Y%m%d")
+        filename = f"{hostname}_{timestamp}.txt"
+
+        # Save configuration to file
+        with open(filename, 'w', encoding='utf-8') as config_file:
+            config_file.write(f"Configuration backup for {hostname}\n")
+            config_file.write(f"Backup date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            config_file.write(f"Device IP: {device_ip}\n")
+            config_file.write(f"{'='*80}\n\n")
+            config_file.write(running_config)
+
+        print(f"Configuration backed up to: {filename}")
+        return filename
+
+    except Exception as e:
+        print(f"ERROR: Failed to backup configuration: {str(e)}")
+        return None
+
+
 def scan_cisco_device(device_info):
     """Connect to Cisco device and retrieve interface information."""
     try:
@@ -162,6 +201,9 @@ def scan_cisco_device(device_info):
 
         # Export to CSV
         export_to_csv(interfaces, device_info['host'])
+
+        # Backup device configuration
+        backup_device_config(connection, device_info['host'])
 
         # Disconnect
         connection.disconnect()
